@@ -91,14 +91,66 @@ class RootState: InputState {
     
     func commitText(_ context: inout any InputContext, _ text: String) {
         store.recentCommittedTexts.append(text)
+        autoCombineLearning(&context)
         context.commit(text)
         updateCandidates(&context, origin: "", page: 1, selectedIndex: 0)
     }
-    
+
     func commitCandidate(_ context: inout any InputContext, _ candidate: Candidate, reason: CandidateCommitReason = .keyEvent) {
         store.recentCommittedTexts.append(candidate.text)
+        autoCombineLearning(&context)
         context.commit(candidate.text)
         updateCandidates(&context, origin: "", page: 1, selectedIndex: 0)
+    }
+
+    // MARK: - 自动造词 + 词频学习
+
+    /// 自动造词计数器（会话内），key 为最近上屏文本的组合
+    private var autoCombineCounts: [String: Int] = [:]
+    /// 计数器容量上限，超过后清理零计数项，防止无限增长
+    private static let autoCombineCountsLimit = 1000
+
+    /// 纯中文（含扩展A区）判断，数字/字母/标点混入的组合不参与造词
+    private static func isPureChinese(_ text: String) -> Bool {
+        guard !text.isEmpty else { return false }
+        for scalar in text.unicodeScalars {
+            let v = scalar.value
+            let isCJK = (v >= 0x4E00 && v <= 0x9FFF) || (v >= 0x3400 && v <= 0x4DBF)
+            if !isCJK {
+                return false
+            }
+        }
+        return true
+    }
+
+    /// 自动造词：最近连续上屏的 2~4 个纯中文片段，重复出现达到阈值后自动加入用户词库
+    /// 与手动快速组词(control+=)互不影响
+    private func autoCombineLearning(_ context: inout any InputContext) {
+        guard config.enableAutoCombine, store.inputMode == .zhhans else { return }
+        let recent = store.recentCommittedTexts.suffix(4)
+        guard recent.count >= 2 else { return }
+        // 从最长组合尝试，取到第一个纯中文组合即统计
+        for n in stride(from: recent.count, through: 2, by: -1) {
+            let combined = recent.suffix(n).joined()
+            guard combined.count >= 2 && combined.count <= 4 else { continue }
+            guard Self.isPureChinese(combined) else { continue }
+
+            if autoCombineCounts.count > Self.autoCombineCountsLimit {
+                autoCombineCounts = autoCombineCounts.filter { $0.value > 0 }
+            }
+            let count = (autoCombineCounts[combined] ?? 0) + 1
+            autoCombineCounts[combined] = count
+
+            if count >= config.autoCombineThreshold,
+               !dict.isUserWord(combined),
+               !dict.isBlocked(combined),
+               let code = dict.queryWubiCode(combined) {
+                dict.addUserText(origin: code, text: combined)
+                autoCombineCounts[combined] = 0
+                context.showMessage("已自动造词【\(combined)】")
+            }
+            break
+        }
     }
     
     func commitSelected(_ context: inout any InputContext, reason: CandidateCommitReason = .keyEvent) {
@@ -189,6 +241,19 @@ class RootState: InputState {
             return true
         }
         return nil
+    }
+
+    // 内联计算器：空码状态下输入 "=" 进入（需在标点处理之前拦截）
+    private func enterCalcHandler(_ event: KeyInput, context: inout any InputContext) -> Bool? {
+        guard config.enableCalcMode,
+              store.inputMode == .zhhans,
+              context.origin.isEmpty,
+              event.modifiers.isEmpty,
+              let char = event.characters, char == "=" else {
+            return nil
+        }
+        setSubState(CalcState(config: config), context: &context)
+        return true
     }
     
     // MARK: - 简单处理不再单独为英文输入模式开一个状态
@@ -470,6 +535,7 @@ class RootState: InputState {
             enterTempEnHandler,
             enterDeleteCandidateHandler,
             enterQuickCombineHandler,
+            enterCalcHandler,
             pinCandidateHandler,
             
             flagsChangeHandler,

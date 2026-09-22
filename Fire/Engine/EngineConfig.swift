@@ -54,6 +54,23 @@ protocol EngineConfig {
     // MARK: - 符号配置
     /** 自动配对 */
     var enablePunctuationAutoPair: Bool { get }
+
+    // MARK: - 增强功能
+    /** 内联计算器：= 开头触发计算/大写金额/中文日期 */
+    var enableCalcMode: Bool { get }
+
+    /** 自动造词：重复输入的中文组合自动加入用户词库 */
+    var enableAutoCombine: Bool { get }
+
+    /** 自动造词触发阈值：同一组合重复次数 */
+    var autoCombineThreshold: Int { get }
+}
+
+// 增强功能默认值：测试 Mock 等未显式实现的场景自动获得
+extension EngineConfig {
+    var enableCalcMode: Bool { true }
+    var enableAutoCombine: Bool { false }
+    var autoCombineThreshold: Int { 2 }
 }
 
 enum CandidatesDirection: Int, Decodable, Encodable, Defaults.Serializable {

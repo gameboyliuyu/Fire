@@ -365,6 +365,18 @@ extension DictReader {
         }
         return result
     }
+
+    // 检查是否已存在同文本用户词（自动造词去重用）
+    func isUserWord(_ text: String) -> Bool {
+        let sql = "select count(*) from wb_py_dict where text = ? and type = 'user'"
+        var result = false
+        sqliteQuery(database, sql, bind: { stmt in
+            sqlite3_bind_text(stmt, 1, text, -1, SQLITE_TRANSIENT)
+        }) { stmt in
+            result = sqlite3_column_int(stmt, 0) > 0
+        }
+        return result
+    }
 }
 
 // MARK: - Export

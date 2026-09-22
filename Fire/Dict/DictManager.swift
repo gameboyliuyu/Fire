@@ -148,6 +148,12 @@ class DictManager: EngineDictManager {
         reader.isBlocked(text)
     }
 
+    // 检查是否已存在同文本用户词（自动造词去重用）
+    func isUserWord(_ text: String) -> Bool {
+        ensureDatabaseOpen()
+        return reader.isUserWord(text)
+    }
+
     func exportUserDictContent() -> String {
         reader.exportUserDictContent()
     }

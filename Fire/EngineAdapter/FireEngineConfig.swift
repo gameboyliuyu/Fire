@@ -68,7 +68,19 @@ struct FireEngineConfig: EngineConfig {
     var enablePunctuationAutoPair: Bool {
         Defaults[.enablePunctuationAutoPair]
     }
-    
+
+    var enableCalcMode: Bool {
+        Defaults[.enableCalcMode]
+    }
+
+    var enableAutoCombine: Bool {
+        Defaults[.enableAutoCombine]
+    }
+
+    var autoCombineThreshold: Int {
+        max(2, Defaults[.autoCombineThreshold])
+    }
+
     static let shared = FireEngineConfig()
 }
 

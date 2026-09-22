@@ -33,6 +33,8 @@ struct GeneralPane: View {
     @Default(.enableWhitespaceBetweenZhEn) private var enableWhitespaceBetweenZhEn
     @Default(.enableExactMatch) private var enableExactMatch
     @Default(.celebrationEffect) private var celebrationEffect
+    @Default(.enableCalcMode) private var enableCalcMode
+    @Default(.enableAutoCombine) private var enableAutoCombine
 
     var body: some View {
         Form {
@@ -63,6 +65,20 @@ struct GeneralPane: View {
                 PreferenceToggleRow(title: "显示 Emoji", isOn: $enableEmoji)
             } header: {
                 Text("编码")
+            }
+            Section {
+                PreferenceToggleRow(
+                    title: "内联计算器",
+                    caption: "输入 = 开头：=3+5*2 计算、=350.56 大写金额、=2026-9-22 中文日期",
+                    isOn: $enableCalcMode
+                )
+                PreferenceToggleRow(
+                    title: "自动造词",
+                    caption: "重复输入的 2~4 字中文组合自动加入用户词库",
+                    isOn: $enableAutoCombine
+                )
+            } header: {
+                Text("增强功能")
             }
             Section {
                 PreferencePickerRow(title: "排列方式") {
