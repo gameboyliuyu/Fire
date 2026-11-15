@@ -46,7 +46,9 @@ enum SmartCalc {
         }
 
         mutating func parseExpression() -> Double? {
-            var value = parseTerm() ?? 0
+            // 不能用 ?? 0：子项出错（如 1/0 除零）返回 nil 时必须向上传播，
+            // 否则错误被吞成 0，导致 "1/0" 求值成 0 而不是无效。
+            guard var value = parseTerm() else { return nil }
             while true {
                 skipSpaces()
                 guard let c = current else { break }
@@ -62,7 +64,7 @@ enum SmartCalc {
         }
 
         private mutating func parseTerm() -> Double? {
-            var value = parseFactor() ?? 0
+            guard var value = parseFactor() else { return nil }
             while true {
                 skipSpaces()
                 guard let c = current else { break }
