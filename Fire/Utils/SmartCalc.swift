@@ -10,70 +10,109 @@ import Foundation
 enum SmartCalc {
     // MARK: - 表达式求值
 
-    /// 仅允许数字、四则运算符、括号、小数点、百分号，防止 NSExpression 注入
+    /// 仅允许数字、四则运算符、括号、小数点、百分号，防止注入
     private static let exprRegex = try! NSRegularExpression(pattern: "^[0-9+\\-*/().%\\s]+$")
 
     /// 求值算术表达式，如 "3+5*2" → 13
+    /// 用纯 Swift 递归下降实现，全程 Double 运算：
+    /// 不用 NSExpression（其整数除法会整除、且非法格式抛 ObjC 异常无法用 Swift catch 捕获）
     static func evaluate(_ expr: String) -> Double? {
         let trimmed = expr.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty,
               exprRegex.firstMatch(in: trimmed, range: NSRange(location: 0, length: trimmed.utf16.count)) != nil else {
             return nil
         }
-        // NSExpression 不认识 %，把 "50%" 预转换为 "(50/100)"
-        let normalized = normalizePercent(trimmed)
-        guard !normalized.isEmpty else { return nil }
-        var expression: NSExpression
-        do {
-            expression = try NSExpression(format: normalized)
-        } catch {
-            return nil
-        }
-        guard let value = expression.expressionValue(with: nil, context: nil) as? Double else {
-            return nil
-        }
-        guard value.isFinite else { return nil }
-        return value
+        var parser = ExprParser(Array(trimmed))
+        guard let value = parser.parseExpression(), parser.isAtEnd else { return nil }
+        guard value.isFinite else { return nil } // 除以 0 的无穷大视为无效
+        // 规整浮点误差：350*1.13 得到 395.49999999999994，固定 6 位小数归到 395.5
+        return (value * 1e6).rounded() / 1e6
     }
 
-    /// "50%" → "(50/100)"，连续百分号暂不支持
-    private static func normalizePercent(_ expr: String) -> String {
-        guard expr.contains("%") else { return expr }
-        guard !expr.contains("%%") else { return "" }
-        var result = ""
-        var i = expr.startIndex
-        while i < expr.endIndex {
-            let c = expr[i]
-            if c == "%" {
-                // 向前找最近的数字字面量
-                if let numStart = lastNumberStart(in: result) {
-                    let number = String(result[numStart...])
-                    result = String(result[..<numStart]) + "(\(number)/100)"
+    /// 递归下降解析器：expression = term (('+'|'-') term)*
+    ///                 term      = factor (('*'|'/') factor)*
+    ///                 factor    = number | '(' expression ')' | factor '%'
+    private struct ExprParser {
+        private let chars: [Character]
+        private var pos = 0
+
+        init(_ chars: [Character]) { self.chars = chars }
+        var isAtEnd: Bool { pos >= chars.count }
+
+        private var current: Character? { pos < chars.count ? chars[pos] : nil }
+
+        private mutating func skipSpaces() {
+            while pos < chars.count && chars[pos] == " " { pos += 1 }
+        }
+
+        mutating func parseExpression() -> Double? {
+            var value = parseTerm() ?? 0
+            while true {
+                skipSpaces()
+                guard let c = current else { break }
+                if c == "+" || c == "-" {
+                    pos += 1
+                    guard let rhs = parseTerm() else { return nil }
+                    value = (c == "+") ? value + rhs : value - rhs
                 } else {
-                    return "" // 位置非法
+                    break
                 }
-            } else {
-                result.append(c)
             }
-            i = expr.index(after: i)
+            return value
         }
-        return result
-    }
 
-    private static func lastNumberStart(in s: String) -> String.Index? {
-        var idx = s.endIndex
-        var started = false
-        while idx > s.startIndex {
-            let prev = s.index(before: idx)
-            let c = s[prev]
-            if c.isNumber || c == "." {
-                idx = prev
-                started = true
-            } else {
-                break
+        private mutating func parseTerm() -> Double? {
+            var value = parseFactor() ?? 0
+            while true {
+                skipSpaces()
+                guard let c = current else { break }
+                if c == "*" || c == "/" {
+                    pos += 1
+                    guard let rhs = parseFactor() else { return nil }
+                    if c == "*" {
+                        value = value * rhs
+                    } else {
+                        if rhs == 0 { return nil } // 除零 → 无效
+                        value = value / rhs
+                    }
+                } else {
+                    break
+                }
             }
+            return value
         }
-        return started ? idx : nil
+
+        private mutating func parseFactor() -> Double? {
+            skipSpaces()
+            guard let c = current else { return nil }
+            var value: Double
+            if c == "(" {
+                pos += 1
+                guard let inner = parseExpression() else { return nil }
+                skipSpaces()
+                guard current == ")" else { return nil }
+                pos += 1
+                value = inner
+            } else if c.isNumber || c == "." {
+                // 读一个数字字面量
+                var buf = ""
+                while pos < chars.count, chars[pos].isNumber || chars[pos] == "." {
+                    buf.append(chars[pos]); pos += 1
+                }
+                guard let n = Double(buf) else { return nil }
+                value = n
+            } else {
+                return nil
+            }
+            // 后缀百分号：50% → 50/100；允许连续 %（200%% → 0.02）
+            while true {
+                skipSpaces()
+                guard current == "%" else { break }
+                pos += 1
+                value = value / 100
+            }
+            return value
+        }
     }
 
     /// 格式化计算结果：整数不带小数点，最多保留 6 位小数并去尾零
@@ -102,7 +141,12 @@ enum SmartCalc {
     /// 数字转人民币大写金额："350" → "叁佰伍拾元整"，"350.56" → "叁佰伍拾元伍角陆分"
     static func uppercaseCurrency(_ s: String) -> String? {
         let trimmed = s.trimmingCharacters(in: .whitespaces)
-        guard isAmount(trimmed), trimmed.hasPrefix("0") == false || trimmed == "0" else { return nil }
+        guard isAmount(trimmed) else { return nil }
+        // 允许 "0.05" 这类纯小数；只拒绝 "0123" 这类多余前导零的整数
+        if !trimmed.hasPrefix("0.") {
+            let intPart = trimmed.split(separator: ".").first.map(String.init) ?? trimmed
+            if intPart.count > 1 && intPart.hasPrefix("0") { return nil }
+        }
         guard let value = Double(trimmed), value < 1e16 else { return nil }
 
         // 四舍五入到分
@@ -143,13 +187,7 @@ enum SmartCalc {
         }
         var parts: [String] = []
         for (i, group) in groups.enumerated().reversed() {
-            if group == 0 {
-                // 组为零，仅在中间补零由下一逻辑处理，此处跳过
-                if i > 0, !parts.isEmpty, !parts.last!.hasSuffix("零"), groups[i - 1] != 0 {
-                    // 保留跨组补零，如 100000100 → 壹亿零仟...（简化处理）
-                }
-                continue
-            }
+            if group == 0 { continue }
             var groupStr = fourDigitToCN(group)
             let bigUnit = bigUnits[i]
             // 低位组不足 4 位且前面有更高组，需要补零，如 10001 → 壹万零壹
@@ -159,7 +197,6 @@ enum SmartCalc {
             parts.append(groupStr + bigUnit)
         }
         var result = parts.joined()
-        // 清理多余的零
         while result.contains("零零") {
             result = result.replacingOccurrences(of: "零零", with: "零")
         }
@@ -176,9 +213,7 @@ enum SmartCalc {
         while n > 0 {
             let digit = n % 10
             if digit == 0 {
-                if !leading {
-                    zeroPending = true
-                }
+                if !leading { zeroPending = true }
             } else {
                 if zeroPending {
                     result = "零" + result
@@ -209,18 +244,21 @@ enum SmartCalc {
         let (y, m, d) = (parts[0], parts[1], parts[2])
         guard (1...12).contains(m), (1...31).contains(d) else { return nil }
 
-        let yearStr = String(y).map { cnDigits[Int(String($0))!] }.joined()
-            .replacingOccurrences(of: "零", with: "〇")
+        // 年份用〇（小写圆圈零），数字本身cnDigits是壹贰叁，取模后映射需转小写
+        let yearStr = String(y).map { cnDigitLower(Int(String($0))!) }.joined()
         let monthStr = cnMonth(m) + "月"
         let dayStr = cnDay(d) + "日"
         return yearStr + "年" + monthStr + dayStr
     }
 
+    /// 小写数字（日期用）：〇一二三四五六七八九
+    private static let lowerDigits = ["〇", "一", "二", "三", "四", "五", "六", "七", "八", "九"]
+    private static func cnDigitLower(_ n: Int) -> String { lowerDigits[n] }
+
     private static func cnMonth(_ m: Int) -> String {
-        if m <= 10 {
-            return m == 10 ? "十" : cnDigits[m]
-        }
-        return m == 11 ? "十一" : "十二"
+        if m <= 9 { return lowerDigits[m] }
+        if m == 10 { return "十" }
+        return "十" + lowerDigits[m - 10] // 十一、十二
     }
 
     private static func cnDay(_ d: Int) -> String {
@@ -228,11 +266,11 @@ enum SmartCalc {
         let ones = d % 10
         switch tens {
         case 0:
-            return cnDigits[ones]
+            return lowerDigits[ones]
         case 1:
-            return ones == 0 ? "十" : "十" + cnDigits[ones]
+            return ones == 0 ? "十" : "十" + lowerDigits[ones]
         default:
-            return ones == 0 ? cnDigits[tens] + "十" : cnDigits[tens] + "十" + cnDigits[ones]
+            return ones == 0 ? lowerDigits[tens] + "十" : lowerDigits[tens] + "十" + lowerDigits[ones]
         }
     }
 }
