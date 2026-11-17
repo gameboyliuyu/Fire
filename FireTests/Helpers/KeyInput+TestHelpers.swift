@@ -72,6 +72,10 @@ enum Key {
     static func ctrlEqual() -> KeyInput {
         equal().withModifiers(.control)
     }
+
+    static func ctrlOptionEqual() -> KeyInput {
+        equal().withModifiers([.control, .option])
+    }
 }
 
 private extension KeyInput {

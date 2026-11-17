@@ -34,7 +34,7 @@ struct GeneralPane: View {
     @Default(.enableExactMatch) private var enableExactMatch
     @Default(.celebrationEffect) private var celebrationEffect
     @Default(.enableCalcMode) private var enableCalcMode
-    @Default(.enableAutoCombine) private var enableAutoCombine
+    @Default(.enableFrequencyLearning) private var enableFrequencyLearning
 
     var body: some View {
         Form {
@@ -73,9 +73,9 @@ struct GeneralPane: View {
                     isOn: $enableCalcMode
                 )
                 PreferenceToggleRow(
-                    title: "自动造词",
-                    caption: "重复输入的 2~4 字中文组合自动加入用户词库",
-                    isOn: $enableAutoCombine
+                    title: "词频学习",
+                    caption: "常选的词会提示你，按 ⌃⌥= 同意后存入个人词库（不自动猜词）",
+                    isOn: $enableFrequencyLearning
                 )
             } header: {
                 Text("增强功能")

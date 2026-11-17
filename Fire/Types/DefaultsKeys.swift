@@ -58,8 +58,9 @@ extension Defaults.Keys {
     static let enableColonAfterNumber = Key<Bool>("enableColonAfterNumber", default: true)
     static let enablePunctuationAutoPair = Key<Bool>("enablePunctuationAutoPair", default: true)
     static let enableCalcMode = Key<Bool>("enableCalcMode", default: true)
-    static let enableAutoCombine = Key<Bool>("enableAutoCombine", default: false)
-    static let autoCombineThreshold = Key<Int>("autoCombineThreshold", default: 2)
+    // 词频学习：统计从候选栏上屏的词，满阈值后提示用户按 control+option+= 同意入库
+    static let enableFrequencyLearning = Key<Bool>("enableFrequencyLearning", default: false)
+    static let frequencyThreshold = Key<Int>("frequencyThreshold", default: 3)
     static let enableWhitespaceBetweenZhEn = Key<Bool>("enableWhitespaceBetweenZhEn", default: true)
     static let wbTablePath = Key<String>("wbTableURL", default: Bundle.main.resourceURL?.appendingPathComponent("wb_table.txt").path ?? "")
     static let pyTablePath = Key<String>("pyTableURL", default: Bundle.main.resourceURL?.appendingPathComponent("py_table.txt").path ?? "")

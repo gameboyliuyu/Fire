@@ -91,68 +91,85 @@ class RootState: InputState {
     
     func commitText(_ context: inout any InputContext, _ text: String) {
         store.recentCommittedTexts.append(text)
-        autoCombineLearning(&context)
+        // 直接上屏的文本（编码串/标点/英文）不参与词频学习
         context.commit(text)
         updateCandidates(&context, origin: "", page: 1, selectedIndex: 0)
     }
 
     func commitCandidate(_ context: inout any InputContext, _ candidate: Candidate, reason: CandidateCommitReason = .keyEvent) {
         store.recentCommittedTexts.append(candidate.text)
-        autoCombineLearning(&context)
+        frequencyLearning(candidate.text, context)
         context.commit(candidate.text)
         updateCandidates(&context, origin: "", page: 1, selectedIndex: 0)
     }
 
-    // MARK: - 自动造词 + 词频学习
+    // MARK: - 词频学习（同意点选入库）
 
-    /// 自动造词计数器（会话内），key 为最近上屏文本的组合
-    private var autoCombineCounts: [String: Int] = [:]
-    /// 计数器容量上限，超过后清理零计数项，防止无限增长
-    private static let autoCombineCountsLimit = 1000
+    /// 候选词被选中的次数（会话内），key 为候选文本
+    private var wordPickCounts: [String: Int] = [:]
+    /// 当前等待用户同意入库的词（满阈值后提示，按 control+option+= 同意）
+    private var pendingFavoriteText: String?
+    /// 用户已忽略或已入库的词，不再重复提示
+    private var handledFavoriteTexts: Set<String> = []
+    private static let wordPickCountsLimit = 500
 
-    /// 纯中文（含扩展A区）判断，数字/字母/标点混入的组合不参与造词
+    /// 纯中文（含扩展A区）判断
     private static func isPureChinese(_ text: String) -> Bool {
         guard !text.isEmpty else { return false }
         for scalar in text.unicodeScalars {
             let v = scalar.value
             let isCJK = (v >= 0x4E00 && v <= 0x9FFF) || (v >= 0x3400 && v <= 0x4DBF)
-            if !isCJK {
-                return false
-            }
+            if !isCJK { return false }
         }
         return true
     }
 
-    /// 自动造词：最近连续上屏的 2~4 个纯中文片段，重复出现达到阈值后自动加入用户词库
-    /// 与手动快速组词(control+=)互不影响
-    private func autoCombineLearning(_ context: inout any InputContext) {
-        guard config.enableAutoCombine, store.inputMode == .zhhans else { return }
-        let recent = store.recentCommittedTexts.suffix(4)
-        guard recent.count >= 2 else { return }
-        // 从最长组合尝试，取到第一个纯中文组合即统计
-        for n in stride(from: recent.count, through: 2, by: -1) {
-            let combined = recent.suffix(n).joined()
-            guard combined.count >= 2 && combined.count <= 4 else { continue }
-            guard Self.isPureChinese(combined) else { continue }
+    /// 词频学习：只统计"从候选栏选中上屏"的词，满阈值且非用户词时提示用户同意入库。
+    /// 绝不从打字流水猜词组 —— 中文无词边界，猜词必然产生垃圾词。
+    private func frequencyLearning(_ text: String, _ context: inout any InputContext) {
+        guard config.enableFrequencyLearning,
+              store.inputMode == .zhhans else { return }
+        // 上一个待确认词没按快捷键、又选了别的词 → 视为忽略，不再提示它
+        if let pending = pendingFavoriteText, pending != text {
+            handledFavoriteTexts.insert(pending)
+            pendingFavoriteText = nil
+        }
+        guard Self.isPureChinese(text),
+              !dict.isUserWord(text),
+              !dict.isBlocked(text),
+              !handledFavoriteTexts.contains(text) else { return }
 
-            if autoCombineCounts.count > Self.autoCombineCountsLimit {
-                autoCombineCounts = autoCombineCounts.filter { $0.value > 0 }
-            }
-            let count = (autoCombineCounts[combined] ?? 0) + 1
-            autoCombineCounts[combined] = count
+        if wordPickCounts.count > Self.wordPickCountsLimit {
+            wordPickCounts = wordPickCounts.filter { $0.value > 0 }
+        }
+        let count = (wordPickCounts[text] ?? 0) + 1
+        wordPickCounts[text] = count
 
-            if count >= config.autoCombineThreshold,
-               !dict.isUserWord(combined),
-               !dict.isBlocked(combined),
-               let code = dict.queryWubiCode(combined) {
-                dict.addUserText(origin: code, text: combined)
-                autoCombineCounts[combined] = 0
-                context.showMessage("已自动造词【\(combined)】")
-            }
-            break
+        if count >= config.frequencyThreshold, pendingFavoriteText == nil {
+            pendingFavoriteText = text
+            context.showMessage("词【\(text)】已选 \(count) 次，按 ⌃⌥= 存入个人词库")
         }
     }
-    
+
+    /// 同意入库快捷键处理：把 pendingFavoriteText 写入用户词库
+    private func acceptFavoriteHandler(_ event: KeyInput, context: inout any InputContext) -> Bool? {
+        guard config.enableFrequencyLearning,
+              let pending = pendingFavoriteText,
+              event.keyCode == UInt16(kVK_ANSI_Equal),
+              event.modifiers == [.control, .option] else { return nil }
+
+        if let code = dict.queryWubiCode(pending) {
+            dict.addUserText(origin: code, text: pending)
+            context.showMessage("已存入个人词库【\(pending)】")
+        } else {
+            context.showMessage("词【\(pending)】无五笔编码，未存入")
+        }
+        handledFavoriteTexts.insert(pending)
+        wordPickCounts[pending] = 0
+        pendingFavoriteText = nil
+        return true
+    }
+
     func commitSelected(_ context: inout any InputContext, reason: CandidateCommitReason = .keyEvent) {
         if context.selectedIndex < context.candidates.count && context.candidates[context.selectedIndex].type != .placeholder {
             commitCandidate(&context, context.candidates[context.selectedIndex])
@@ -532,6 +549,7 @@ class RootState: InputState {
         let codingHandlers = [
             subStateHandler,
             
+            acceptFavoriteHandler,
             enterTempEnHandler,
             enterDeleteCandidateHandler,
             enterQuickCombineHandler,

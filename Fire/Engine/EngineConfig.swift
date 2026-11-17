@@ -59,18 +59,18 @@ protocol EngineConfig {
     /** 内联计算器：= 开头触发计算/大写金额/中文日期 */
     var enableCalcMode: Bool { get }
 
-    /** 自动造词：重复输入的中文组合自动加入用户词库 */
-    var enableAutoCombine: Bool { get }
+    /** 词频学习：统计从候选栏上屏的词，满阈值后提示用户同意入库 */
+    var enableFrequencyLearning: Bool { get }
 
-    /** 自动造词触发阈值：同一组合重复次数 */
-    var autoCombineThreshold: Int { get }
+    /** 词频学习触发阈值：同一候选词被选中的次数 */
+    var frequencyThreshold: Int { get }
 }
 
 // 增强功能默认值：测试 Mock 等未显式实现的场景自动获得
 extension EngineConfig {
     var enableCalcMode: Bool { true }
-    var enableAutoCombine: Bool { false }
-    var autoCombineThreshold: Int { 2 }
+    var enableFrequencyLearning: Bool { false }
+    var frequencyThreshold: Int { 3 }
 }
 
 enum CandidatesDirection: Int, Decodable, Encodable, Defaults.Serializable {

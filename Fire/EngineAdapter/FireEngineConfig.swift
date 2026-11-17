@@ -73,12 +73,12 @@ struct FireEngineConfig: EngineConfig {
         Defaults[.enableCalcMode]
     }
 
-    var enableAutoCombine: Bool {
-        Defaults[.enableAutoCombine]
+    var enableFrequencyLearning: Bool {
+        Defaults[.enableFrequencyLearning]
     }
 
-    var autoCombineThreshold: Int {
-        max(2, Defaults[.autoCombineThreshold])
+    var frequencyThreshold: Int {
+        max(2, Defaults[.frequencyThreshold])
     }
 
     static let shared = FireEngineConfig()
