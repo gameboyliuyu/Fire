@@ -98,7 +98,7 @@ class RootState: InputState {
 
     func commitCandidate(_ context: inout any InputContext, _ candidate: Candidate, reason: CandidateCommitReason = .keyEvent) {
         store.recentCommittedTexts.append(candidate.text)
-        frequencyLearning(candidate.text, context)
+        frequencyLearning(candidate.text, &context)
         context.commit(candidate.text)
         updateCandidates(&context, origin: "", page: 1, selectedIndex: 0)
     }
