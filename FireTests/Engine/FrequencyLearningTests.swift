@@ -32,12 +32,13 @@ struct FrequencyLearningTests {
         var config = MockEngineConfig()
         config.enableFrequencyLearning = true
         config.frequencyThreshold = 3
-        let (root, _, dict, mockContext) = TestFixtures.makeRootState(config: config)
-        var context: any InputContext = mockContext
+        let (root, _, dict, _) = TestFixtures.makeRootState(config: config)
+        let ctx = MockInputContext()
+        var context: any InputContext = ctx
         for _ in 0..<3 { pick(root, &context, text: "舆情") }
         // 满阈值只提示，绝不自动入库
         #expect(dict.addedUserTexts.isEmpty)
-        #expect(mockContext.messages.contains { $0.contains("舆情") && $0.contains("存入") })
+        #expect(ctx.messages.contains { $0.contains("舆情") && $0.contains("存入") })
     }
 
     @Test func acceptShortcut_storesWord() {
@@ -71,14 +72,15 @@ struct FrequencyLearningTests {
         var config = MockEngineConfig()
         config.enableFrequencyLearning = true
         config.frequencyThreshold = 2
-        let (root, _, dict, mockContext) = TestFixtures.makeRootState(config: config)
-        var context: any InputContext = MockInputContext()
+        let (root, _, dict, _) = TestFixtures.makeRootState(config: config)
+        let ctx = MockInputContext()
+        var context: any InputContext = ctx
         // 舆情满阈值弹出提示，但用户不按同意，继续打别的词 → 视为忽略
         for _ in 0..<2 { pick(root, &context, text: "舆情") }
         pick(root, &context, text: "文件")
-        mockContext.messages.removeAll()
+        ctx.messages.removeAll()
         for _ in 0..<3 { pick(root, &context, text: "舆情") }
-        #expect(!mockContext.messages.contains { $0.contains("舆情") && $0.contains("存入") })
+        #expect(!ctx.messages.contains { $0.contains("舆情") && $0.contains("存入") })
         #expect(dict.addedUserTexts.isEmpty)
     }
 
