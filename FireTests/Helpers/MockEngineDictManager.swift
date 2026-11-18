@@ -4,6 +4,7 @@ final class MockEngineDictManager: EngineDictManager {
     var candidatesByOrigin: [String: [Candidate]] = [:]
     var hasNextPages: [String: Bool] = [:]
     var wubiCodes: [String: String] = [:]
+    var knownTexts: Set<String> = []
     var blockedTexts: Set<String> = []
     var addedUserTexts: [(origin: String, text: String)] = []
     var setFirstCalls: [(origin: String, candidate: Candidate)] = []
@@ -36,5 +37,9 @@ final class MockEngineDictManager: EngineDictManager {
 
     func addUserText(origin: String, text: String) {
         addedUserTexts.append((origin, text))
+    }
+
+    func hasText(_ text: String) -> Bool {
+        knownTexts.contains(text)
     }
 }
