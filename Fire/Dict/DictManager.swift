@@ -154,6 +154,12 @@ class DictManager: EngineDictManager {
         return reader.isUserWord(text)
     }
 
+    // 检查词是否已存在于词库（含基础词库）：已存在的词不需要词频学习提示
+    func hasText(_ text: String) -> Bool {
+        ensureDatabaseOpen()
+        return reader.hasText(text)
+    }
+
     func exportUserDictContent() -> String {
         reader.exportUserDictContent()
     }
