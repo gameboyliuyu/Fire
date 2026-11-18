@@ -94,4 +94,18 @@ struct FrequencyLearningTests {
         for _ in 0..<4 { pick(root, &context, text: "舆情") }
         #expect(dict.addedUserTexts.isEmpty)
     }
+
+    @Test func baseDictWord_doesNotPrompt() {
+        // 基础词库里已有的词（如常用单字"滑"）无需学习入库，满阈值也不提示
+        var config = MockEngineConfig()
+        config.enableFrequencyLearning = true
+        config.frequencyThreshold = 2
+        let (root, _, dict, _) = TestFixtures.makeRootState(config: config)
+        let ctx = MockInputContext()
+        var context: any InputContext = ctx
+        dict.knownTexts.insert("滑")
+        for _ in 0..<3 { pick(root, &context, text: "滑") }
+        #expect(dict.addedUserTexts.isEmpty)
+        #expect(!ctx.messages.contains { $0.contains("存入") })
+    }
 }
