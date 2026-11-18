@@ -135,7 +135,7 @@ class RootState: InputState {
             pendingFavoriteText = nil
         }
         guard Self.isPureChinese(text),
-              !dict.isUserWord(text),
+              !dict.hasText(text),
               !dict.isBlocked(text),
               !handledFavoriteTexts.contains(text) else { return }
 
