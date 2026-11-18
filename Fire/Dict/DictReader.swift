@@ -377,6 +377,18 @@ extension DictReader {
         }
         return result
     }
+
+    // 检查词是否已存在于词库（wb/py/user 任意类型）：已存在的词无需再学习入库
+    func hasText(_ text: String) -> Bool {
+        let sql = "select count(*) from wb_py_dict where text = ? and type in ('wb', 'py', 'user')"
+        var result = false
+        sqliteQuery(database, sql, bind: { stmt in
+            sqlite3_bind_text(stmt, 1, text, -1, SQLITE_TRANSIENT)
+        }) { stmt in
+            result = sqlite3_column_int(stmt, 0) > 0
+        }
+        return result
+    }
 }
 
 // MARK: - Export
