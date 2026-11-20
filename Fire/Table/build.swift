@@ -9,7 +9,7 @@
 import AppKit
 import Defaults
 
-private let dictSchemaVersion: Int32 = 3
+private let dictSchemaVersion: Int32 = 4
 
 /// 安全读取可为 NULL 的 SQLite 文本列
 private func columnText(_ stmt: OpaquePointer?, _ index: Int32) -> String? {
@@ -94,6 +94,7 @@ func isDictSchemaCurrent() -> Bool {
     guard sqlite3_open_v2(path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else { return false }
     defer { sqlite3_close(db) }
     guard dbHasColumn(db, table: "wb_py_dict", column: "spell"),
+          dbHasColumn(db, table: "wb_py_dict", column: "freq"),
           dbHasTable(db, table: "blocked_words") else {
         return false
     }
@@ -300,6 +301,7 @@ func buildDict() -> Bool {
     let wbSpellPath = Defaults[.wbSpellPath]
     let pinyinSpellPath = resourceURL?.appendingPathComponent("pinyin_spell.txt").path
     let emojiPath = resourceURL?.appendingPathComponent("emoji_table.txt").path
+    let pyFreqPath = resourceURL?.appendingPathComponent("py_freq_table.txt").path
 
     let built = DictBuilder.build(
         wbPath: wbPath,
@@ -307,7 +309,8 @@ func buildDict() -> Bool {
         dbPath: newPath,
         wbSpellPath: wbSpellPath,
         pinyinSpellPath: pinyinSpellPath,
-        emojiPath: emojiPath
+        emojiPath: emojiPath,
+        pyFreqPath: pyFreqPath
     )
     guard built else {
         print("build failed")
