@@ -15,7 +15,8 @@ enum DictBuilder {
         wbSpellPath: String?,
         pinyinSpellPath: String?,
         emojiPath: String? = nil,
-        pyFreqPath: String? = nil
+        pyFreqPath: String? = nil,
+        abbrPath: String? = nil
     ) -> Bool {
         guard FileManager.default.fileExists(atPath: wbPath) else {
             print("[DictBuilder] wb table not found: \(wbPath)")
@@ -73,6 +74,13 @@ enum DictBuilder {
             }
         } else {
             print("[DictBuilder] pinyin freq table not found, candidates fall back to alpha order")
+        }
+        // 简拼（首字母缩写）：wm→我们 等，离线生成随包发布，构建期直接导入
+        if let abbrPath, FileManager.default.fileExists(atPath: abbrPath) {
+            guard applyAbbreviations(db: db, path: abbrPath) else {
+                print("[DictBuilder] applyAbbreviations failed")
+                return false
+            }
         }
 
         print("[DictBuilder] build complete: \(dbPath)")
@@ -315,6 +323,42 @@ enum DictBuilder {
 
         let missed = emojiMap.count - hitKeywords.count
         print("[DictBuilder] wb_py_dict combined; emoji rows=\(emojiRows), keywords hit=\(hitKeywords.count), missed=\(missed)")
+        return true
+    }
+
+    /// 导入简拼词表（abbr<TAB>词<TAB>词频<TAB>五笔码）到 type='abbr'。
+    /// 简拼与全拼是不同 query，不会覆盖：wm→我们 与 women→我们 并存。
+    private static func applyAbbreviations(db: OpaquePointer?, path: String) -> Bool {
+        guard let content = try? String(contentsOfFile: path, encoding: .utf8) else {
+            print("[DictBuilder] cannot read abbr table: \(path)")
+            return false
+        }
+        guard let insertStmt = prepareStmt(db, """
+            insert into wb_py_dict(wbcode, text, type, query, freq, is_gb2312)
+            values(?1, ?2, 'abbr', ?3, ?4, 1)
+            """) else { return false }
+        defer { sqlite3_finalize(insertStmt) }
+
+        sqlite3_exec(db, "BEGIN TRANSACTION", nil, nil, nil)
+        var inserted = 0
+        for line in content.split(whereSeparator: \.isNewline) {
+            let cols = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
+            guard cols.count >= 3, let freq = Int32(cols[2]) else { continue }
+            let abbr = cols[0], text = cols[1]
+            let wbcode = cols.count >= 4 ? cols[3] : ""
+            sqlite3_reset(insertStmt); sqlite3_clear_bindings(insertStmt)
+            sqlite3_bind_text(insertStmt, 1, wbcode, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_text(insertStmt, 2, text, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_text(insertStmt, 3, abbr, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_int(insertStmt, 4, freq)
+            if sqlite3_step(insertStmt) == SQLITE_DONE { inserted += 1 }
+        }
+        guard sqlite3_exec(db, "COMMIT", nil, nil, nil) == SQLITE_OK else {
+            print("[DictBuilder] abbr commit failed: \(errmsg(db))")
+            sqlite3_exec(db, "ROLLBACK", nil, nil, nil)
+            return false
+        }
+        print("[DictBuilder] abbr applied: inserted=\(inserted)")
         return true
     }
 
