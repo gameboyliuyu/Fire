@@ -67,12 +67,13 @@ final class DictReader {
                     text,
                     MIN(query) AS query,
                     MIN(id) AS min_id,
-                    MIN(CASE WHEN query = :queryRaw THEN 0 ELSE 1 END) AS zrank
+                    MIN(CASE WHEN query = :queryRaw THEN 0 ELSE 1 END) AS zrank,
+                    MAX(freq) AS max_freq
                 FROM wb_py_dict
                 WHERE query glob :queryLike \(typeFilter) \(gbkFilter)
                   AND text NOT IN (SELECT text FROM blocked_words)  -- 排除屏蔽词
                 GROUP BY text
-                ORDER BY zrank, query, min_id
+                ORDER BY zrank, max_freq DESC, query, min_id
                 LIMIT :offset, \(candidateCount + 1)
             )
             SELECT 
@@ -85,7 +86,7 @@ final class DictReader {
                 d.is_gb2312 AS is_gb2312
             FROM wb_py_dict d
             JOIN top_texts t ON d.id = t.min_id
-            ORDER BY t.zrank, t.query, t.min_id;
+            ORDER BY t.zrank, t.max_freq DESC, t.query, t.min_id;
         """
         return sql
     }
