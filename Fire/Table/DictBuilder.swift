@@ -14,7 +14,8 @@ enum DictBuilder {
         dbPath: String,
         wbSpellPath: String?,
         pinyinSpellPath: String?,
-        emojiPath: String? = nil
+        emojiPath: String? = nil,
+        pyFreqPath: String? = nil
     ) -> Bool {
         guard FileManager.default.fileExists(atPath: wbPath) else {
             print("[DictBuilder] wb table not found: \(wbPath)")
@@ -64,9 +65,85 @@ enum DictBuilder {
             print("[DictBuilder] reset emoji is_gb2312 failed: \(errmsg(db))")
             return false
         }
+        // 词频：写入 freq 列并补入 jieba 高频词，供候选按频率排序
+        if let pyFreqPath, FileManager.default.fileExists(atPath: pyFreqPath) {
+            guard applyPinyinFrequency(db: db, path: pyFreqPath) else {
+                print("[DictBuilder] applyPinyinFrequency failed")
+                return false
+            }
+        } else {
+            print("[DictBuilder] pinyin freq table not found, candidates fall back to alpha order")
+        }
 
         print("[DictBuilder] build complete: \(dbPath)")
         return true
+    }
+
+    /// 读取 py_freq_table.txt（拼音<TAB>词<TAB>词频<TAB>五笔码），
+    /// 1) UPDATE 现有 py 词条的 freq；2) INSERT 库中没有的高频词。
+    private static func applyPinyinFrequency(db: OpaquePointer?, path: String) -> Bool {
+        guard let content = try? String(contentsOfFile: path, encoding: .utf8) else {
+            print("[DictBuilder] cannot read freq table: \(path)")
+            return false
+        }
+        guard let updateStmt = prepareStmt(db, """
+            update wb_py_dict set freq = ?1 where type = 'py' and query = ?2 and text = ?3
+            """) else { return false }
+        defer { sqlite3_finalize(updateStmt) }
+        // 补入词：wbcode 尽量用词表提供的（后缀合并词可能为空），空则跳过五笔码
+        guard let insertStmt = prepareStmt(db, """
+            insert into wb_py_dict(wbcode, text, type, query, freq, is_gb2312)
+            values(?1, ?2, 'py', ?3, ?4, 1)
+            """) else { return false }
+        defer { sqlite3_finalize(insertStmt) }
+        guard let checkStmt = prepareStmt(db, """
+            select 1 from wb_py_dict where type = 'py' and query = ?1 and text = ?2 limit 1
+            """) else { return false }
+        defer { sqlite3_finalize(checkStmt) }
+
+        sqlite3_exec(db, "BEGIN TRANSACTION", nil, nil, nil)
+        var updated = 0, inserted = 0
+        for line in content.split(whereSeparator: \.isNewline) {
+            let cols = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
+            guard cols.count >= 3, let freq = Int32(cols[2]) else { continue }
+            let py = cols[0], text = cols[1]
+            let wbcode = cols.count >= 4 ? cols[3] : ""
+            // 先查是否存在
+            sqlite3_reset(checkStmt); sqlite3_clear_bindings(checkStmt)
+            sqlite3_bind_text(checkStmt, 1, py, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_text(checkStmt, 2, text, -1, SQLITE_TRANSIENT)
+            let exists = sqlite3_step(checkStmt) == SQLITE_ROW
+            if exists {
+                sqlite3_reset(updateStmt); sqlite3_clear_bindings(updateStmt)
+                sqlite3_bind_int(updateStmt, 1, freq)
+                sqlite3_bind_text(updateStmt, 2, py, -1, SQLITE_TRANSIENT)
+                sqlite3_bind_text(updateStmt, 3, text, -1, SQLITE_TRANSIENT)
+                if sqlite3_step(updateStmt) == SQLITE_DONE { updated += 1 }
+            } else {
+                sqlite3_reset(insertStmt); sqlite3_clear_bindings(insertStmt)
+                sqlite3_bind_text(insertStmt, 1, wbcode, -1, SQLITE_TRANSIENT)
+                sqlite3_bind_text(insertStmt, 2, text, -1, SQLITE_TRANSIENT)
+                sqlite3_bind_text(insertStmt, 3, py, -1, SQLITE_TRANSIENT)
+                sqlite3_bind_int(insertStmt, 4, freq)
+                if sqlite3_step(insertStmt) == SQLITE_DONE { inserted += 1 }
+            }
+        }
+        guard sqlite3_exec(db, "COMMIT", nil, nil, nil) == SQLITE_OK else {
+            print("[DictBuilder] freq commit failed: \(errmsg(db))")
+            sqlite3_exec(db, "ROLLBACK", nil, nil, nil)
+            return false
+        }
+        print("[DictBuilder] freq applied: updated=\(updated) inserted=\(inserted)")
+        return true
+    }
+
+    private static func prepareStmt(_ db: OpaquePointer?, _ sql: String) -> OpaquePointer? {
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            print("[DictBuilder] prepare freq stmt failed: \(errmsg(db))")
+            return nil
+        }
+        return stmt
     }
 
     /// 解析 emoji_table.txt：首列为关键词，后续每列为 emoji
@@ -107,6 +184,7 @@ enum DictBuilder {
               version text default null,
               spell text default null,
               pinyin text default null,
+              freq integer default 0,
               is_gb2312 integer default 1
             );
             insert into sqlite_sequence(name, seq) values('wb_py_dict', 100000);
