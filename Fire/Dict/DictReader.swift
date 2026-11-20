@@ -77,6 +77,9 @@ final class DictReader {
                 FROM wb_py_dict
                 WHERE query glob :queryLike \(typeFilter) \(gbkFilter)
                   AND text NOT IN (SELECT text FROM blocked_words)
+                  -- 用户词必须打全码才进候选：输入 r/rs 时不再冒出 rsyw 的「招标文件」
+                  -- 否则用户词（tier=0）仅凭前缀匹配就压住精确五笔单字（的/打）
+                  AND (type != 'user' OR query = :queryRaw)
             ),
             ranked AS (
                 SELECT
