@@ -59,34 +59,70 @@ final class DictReader {
             let quoted = types.map { "'\($0)'" }.joined(separator: ", ")
             return "and type in (\(quoted))"
         }()
-        // zrank：字面量匹配（:queryRaw，含真实 z）优先于 z 万能键通配命中，
-        // 避免用户词编码含 z 时被 ORDER BY query 排到 LIMIT 之外
+        // 排序分层（五笔为主 + 词频动态）：
+        //   tier 0 用户词(id<0)  >  tier 1 五笔精确  >  tier 2 拼音精确  >  tier 3 前缀匹配
+        //   - 用户词靠负 id 天然置顶，最高优先
+        //   - 五笔精确匹配（含一级简码 o=为/y=主）按码表 id 顺序，不受词频干扰
+        //   - 拼音精确/前缀匹配按词频降序，常用词上浮
+        //   - zrank 保留：字面量命中优先于 z 万能键通配
         let sql = """
-            WITH top_texts AS (
-                SELECT 
+            WITH matched AS (
+                SELECT
                     text,
-                    MIN(query) AS query,
-                    MIN(id) AS min_id,
-                    MIN(CASE WHEN query = :queryRaw THEN 0 ELSE 1 END) AS zrank,
-                    MAX(freq) AS max_freq
+                    query,
+                    id,
+                    type,
+                    freq,
+                    CASE WHEN query = :queryRaw THEN 0 ELSE 1 END AS zr
                 FROM wb_py_dict
                 WHERE query glob :queryLike \(typeFilter) \(gbkFilter)
-                  AND text NOT IN (SELECT text FROM blocked_words)  -- 排除屏蔽词
+                  AND text NOT IN (SELECT text FROM blocked_words)
+            ),
+            ranked AS (
+                SELECT
+                    text,
+                    MIN(query) AS query,
+                    MIN(zr) AS zrank,
+                    -- tier：0=用户词, 1=五笔精确, 2=拼音精确, 3=前缀
+                    MIN(CASE
+                        WHEN type = 'user' THEN 0
+                        WHEN zr = 0 AND type = 'wb' THEN 1
+                        WHEN zr = 0 AND type = 'py' THEN 2
+                        ELSE 3 END) AS tier,
+                    MIN(id) AS min_id,
+                    MAX(freq) AS max_freq,
+                    -- 按 text 聚合时，优先记录五笔精确匹配的最小 id（一级简码顺序）
+                    MIN(CASE WHEN zr = 0 AND type = 'wb' THEN id END) AS wb_exact_id
+                FROM matched
                 GROUP BY text
-                ORDER BY zrank, max_freq DESC, query, min_id
+            ),
+            top_texts AS (
+                SELECT * FROM ranked
+                ORDER BY
+                    tier,
+                    zrank,
+                    CASE WHEN tier <= 1 THEN min_id END,   -- 用户词/五笔：码表顺序
+                    CASE WHEN tier >= 2 THEN max_freq END DESC,  -- 拼音：词频优先
+                    query, min_id
                 LIMIT :offset, \(candidateCount + 1)
             )
-            SELECT 
-                (select max(wbcode) from wb_py_dict where text = t.text and query glob :queryLike group by text) as wbcode,
+            SELECT
+                (select max(wbcode) from wb_py_dict
+                 where text = t.text and query glob :queryLike group by text) as wbcode,
                 d.text,
-                d.type     AS type,                  -- 假设 type 在组内相同，否则需明确逻辑
+                d.type AS type,
                 t.query,
-                d.spell     AS spell,
-                d.pinyin    AS pinyin,
+                d.spell AS spell,
+                d.pinyin AS pinyin,
                 d.is_gb2312 AS is_gb2312
             FROM wb_py_dict d
             JOIN top_texts t ON d.id = t.min_id
-            ORDER BY t.zrank, t.max_freq DESC, t.query, t.min_id;
+            ORDER BY
+                t.tier,
+                t.zrank,
+                CASE WHEN t.tier <= 1 THEN t.min_id END,
+                CASE WHEN t.tier >= 2 THEN t.max_freq END DESC,
+                t.query, t.min_id;
         """
         return sql
     }
