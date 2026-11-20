@@ -51,7 +51,7 @@ final class DictReader {
             case .pinyin:
                 types = ["py", "user"]
             case .wubiPinyin:
-                types = ["wb", "py", "user"]
+                types = ["wb", "py", "abbr", "user"]
             }
             if Defaults[.enableEmoji] {
                 types.append("emoji")
@@ -59,11 +59,14 @@ final class DictReader {
             let quoted = types.map { "'\($0)'" }.joined(separator: ", ")
             return "and type in (\(quoted))"
         }()
-        // 排序分层（五笔为主 + 词频动态）：
-        //   tier 0 用户词(id<0)  >  tier 1 五笔精确  >  tier 2 拼音精确  >  tier 3 前缀匹配
-        //   - 用户词靠负 id 天然置顶，最高优先
-        //   - 五笔精确匹配（含一级简码 o=为/y=主）按码表 id 顺序，不受词频干扰
-        //   - 拼音精确/前缀匹配按词频降序，常用词上浮
+        // 排序分层（五笔为主 + 简拼词频优先）：
+        //   tier 0 用户词全码 / 一级简码（按码表 id，绝对置顶）
+        //   tier 1 单字母简拼（2字词首字母，罕见）
+        //   tier 2 五笔精确 + 简拼精确（按词频，简拼词频高者上浮；五笔同频按 id）
+        //   tier 3 拼音精确（按词频）
+        //   tier 4 前缀匹配（按词频）
+        //   - 简拼 type='abbr' 由离线词表导入，wm→我们(98740) 压过 wm→仙(0)
+        //   - 一级简码 o=为/y=主/r=的 用「五笔精确单字 + min_id 最小」识别，不受词频干扰
         //   - zrank 保留：字面量命中优先于 z 万能键通配
         let sql = """
             WITH matched AS (
@@ -73,12 +76,17 @@ final class DictReader {
                     id,
                     type,
                     freq,
-                    CASE WHEN query = :queryRaw THEN 0 ELSE 1 END AS zr
+                    CASE WHEN query = :queryRaw THEN 0 ELSE 1 END AS zr,
+                    CASE WHEN length(:queryRaw) = 1 AND type = 'wb'
+                              AND query = :queryRaw AND length(text) = 1
+                              AND id = (SELECT MIN(id) FROM wb_py_dict w
+                                        WHERE w.type = 'wb' AND w.query = :queryRaw
+                                          AND length(w.text) = 1)
+                         THEN 1 ELSE 0 END AS is_first
                 FROM wb_py_dict
                 WHERE query glob :queryLike \(typeFilter) \(gbkFilter)
                   AND text NOT IN (SELECT text FROM blocked_words)
                   -- 用户词必须打全码才进候选：输入 r/rs 时不再冒出 rsyw 的「招标文件」
-                  -- 否则用户词（tier=0）仅凭前缀匹配就压住精确五笔单字（的/打）
                   AND (type != 'user' OR query = :queryRaw)
             ),
             ranked AS (
@@ -86,15 +94,15 @@ final class DictReader {
                     text,
                     MIN(query) AS query,
                     MIN(zr) AS zrank,
-                    -- tier：0=用户词, 1=五笔精确, 2=拼音精确, 3=前缀
                     MIN(CASE
-                        WHEN type = 'user' THEN 0
-                        WHEN zr = 0 AND type = 'wb' THEN 1
-                        WHEN zr = 0 AND type = 'py' THEN 2
-                        ELSE 3 END) AS tier,
+                        WHEN type = 'user' AND zr = 0 THEN 0
+                        WHEN is_first = 1 THEN 0
+                        WHEN zr = 0 AND type = 'abbr' AND length(:queryRaw) = 1 THEN 1
+                        WHEN zr = 0 AND type IN ('wb', 'abbr') THEN 2
+                        WHEN zr = 0 AND type = 'py' THEN 3
+                        ELSE 4 END) AS tier,
                     MIN(id) AS min_id,
                     MAX(freq) AS max_freq,
-                    -- 按 text 聚合时，优先记录五笔精确匹配的最小 id（一级简码顺序）
                     MIN(CASE WHEN zr = 0 AND type = 'wb' THEN id END) AS wb_exact_id
                 FROM matched
                 GROUP BY text
@@ -104,8 +112,7 @@ final class DictReader {
                 ORDER BY
                     tier,
                     zrank,
-                    CASE WHEN tier <= 1 THEN min_id END,   -- 用户词/五笔：码表顺序
-                    CASE WHEN tier >= 2 THEN max_freq END DESC,  -- 拼音：词频优先
+                    max_freq DESC,
                     query, min_id
                 LIMIT :offset, \(candidateCount + 1)
             )
@@ -123,8 +130,7 @@ final class DictReader {
             ORDER BY
                 t.tier,
                 t.zrank,
-                CASE WHEN t.tier <= 1 THEN t.min_id END,
-                CASE WHEN t.tier >= 2 THEN t.max_freq END DESC,
+                t.max_freq DESC,
                 t.query, t.min_id;
         """
         return sql
