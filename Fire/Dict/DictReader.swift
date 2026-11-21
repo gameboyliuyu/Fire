@@ -59,13 +59,13 @@ final class DictReader {
             let quoted = types.map { "'\($0)'" }.joined(separator: ", ")
             return "and type in (\(quoted))"
         }()
-        // 排序分层（五笔为主 + 简拼词频优先）：
+        // 排序分层（五笔为王，单字优先，简拼让位）：
         //   tier 0 用户词全码 / 一级简码（按码表 id，绝对置顶）
-        //   tier 1 单字母简拼（2字词首字母，罕见）
-        //   tier 2 五笔精确 + 简拼精确（按词频，简拼词频高者上浮；五笔同频按 id）
-        //   tier 3 拼音精确（按词频）
+        //   tier 1 五笔精确单字（二级简码，如 wh=个/rs=打/gc=到；按码表 id）
+        //   tier 2 简拼精确（wm=我们，按词频）—— 让位给 tier 1 五笔单字
+        //   tier 3 拼音精确 / 五笔词组（按词频）
         //   tier 4 前缀匹配（按词频）
-        //   - 简拼 type='abbr' 由离线词表导入，wm→我们(98740) 压过 wm→仙(0)
+        //   关键：两码简拼（文化/认识/过程…词频几万）绝不能压住二级简码单字（个/打/到，freq=0）
         //   - 一级简码 o=为/y=主/r=的 用「五笔精确单字 + min_id 最小」识别，不受词频干扰
         //   - zrank 保留：字面量命中优先于 z 万能键通配
         let sql = """
@@ -97,9 +97,10 @@ final class DictReader {
                     MIN(CASE
                         WHEN type = 'user' AND zr = 0 THEN 0
                         WHEN is_first = 1 THEN 0
-                        WHEN zr = 0 AND type = 'abbr' AND length(:queryRaw) = 1 THEN 1
-                        WHEN zr = 0 AND type IN ('wb', 'abbr') THEN 2
+                        WHEN zr = 0 AND type = 'wb' AND length(text) = 1 THEN 1
+                        WHEN zr = 0 AND type = 'abbr' THEN 2
                         WHEN zr = 0 AND type = 'py' THEN 3
+                        WHEN zr = 0 AND type = 'wb' THEN 3
                         ELSE 4 END) AS tier,
                     MIN(id) AS min_id,
                     MAX(freq) AS max_freq,
@@ -112,7 +113,8 @@ final class DictReader {
                 ORDER BY
                     tier,
                     zrank,
-                    max_freq DESC,
+                    CASE WHEN tier IN (0, 1) THEN min_id END,        -- 用户词/五笔单字：码表 id 顺序
+                    CASE WHEN tier IN (2, 3, 4) THEN max_freq END DESC,  -- 简拼/拼音/前缀：词频优先
                     query, min_id
                 LIMIT :offset, \(candidateCount + 1)
             )
@@ -130,7 +132,8 @@ final class DictReader {
             ORDER BY
                 t.tier,
                 t.zrank,
-                t.max_freq DESC,
+                CASE WHEN t.tier IN (0, 1) THEN t.min_id END,
+                CASE WHEN t.tier IN (2, 3, 4) THEN t.max_freq END DESC,
                 t.query, t.min_id;
         """
         return sql
